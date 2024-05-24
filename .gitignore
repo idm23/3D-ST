@@ -4,6 +4,7 @@ mvtec*
 *zip
 *.tar.xz
 *.npy
+*.pth
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

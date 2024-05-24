@@ -25,6 +25,7 @@ setuptools.setup(
         'torch>=2.1.0', # There are issues with this. Torch is required but installation isn't so simple.
         'numpy>=1.26.0',
         'matplotlib',
-        'tqdm'
+        'tqdm',
+        'numba'
     ],
 )

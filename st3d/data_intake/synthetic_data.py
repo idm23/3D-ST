@@ -3,13 +3,14 @@
 # ======== standard imports ========
 import os
 import multiprocessing as mp
+from pathlib import Path
 # ==================================
 
 # ======= third party imports ======
 import matplotlib.pyplot as plt
 import numpy as np
 from tqdm import tqdm
-import torch
+import numba as nb
 # ==================================
 
 # ========= program imports ========
@@ -33,10 +34,21 @@ def get_all_fpaths(data_path: str) -> list[str]:
         all_training_fpaths += [os.path.join(cpath, fname) for fname in os.listdir(cpath)]
     return all_training_fpaths
 
+def create_scene_subsets(num_scenes: int, num_objs_in_scene: int, all_fpaths: list[str]) -> list[list[str]]:
+    scene_obj_paths = []
+    for _ in range(num_scenes):
+        cur_scene_obj_paths = []
+        for _ in range(num_objs_in_scene):
+            cur_scene_obj_paths.append(all_fpaths[np.random.randint(len(all_fpaths))])
+        scene_obj_paths.append(cur_scene_obj_paths)
+    return scene_obj_paths
+
+@nb.njit
 def scale_verts(verts: np.ndarray) -> np.ndarray:
     verts /= np.max(np.abs(verts))
     return verts
 
+#@nb.njit
 def rotate_verts(verts: np.ndarray) -> np.ndarray:
     rx, ry, rz = np.random.rand(3) * 2 * np.pi
     Rx = np.array([
@@ -54,27 +66,20 @@ def rotate_verts(verts: np.ndarray) -> np.ndarray:
         [np.sin(rz), np.cos(rz), 0],
         [0, 0, 1]
     ])
-    R = Rz @ Ry @ Rx
-    return verts @ R.T
+    R = np.dot(Rz, np.dot(Ry, Rx, out = None), out=None)
+    return np.dot(verts, R.T, out=None)
 
+@nb.njit
 def translate_verts(verts: np.ndarray) -> np.ndarray:
     translation = np.random.uniform(-3, 3, 3)
     return verts + translation
 
+#@nb.njit
 def transform_obj(verts: np.ndarray, faces: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     verts = scale_verts(verts)
     verts = rotate_verts(verts)
     verts = translate_verts(verts)
     return verts, faces
-
-def create_scene_subsets(num_scenes: int, num_objs_in_scene: int, all_fpaths: list[str]) -> list[list[str]]:
-    scene_obj_paths = []
-    for _ in range(num_scenes):
-        cur_scene_obj_paths = []
-        for _ in range(num_objs_in_scene):
-            cur_scene_obj_paths.append(all_fpaths[np.random.randint(len(all_fpaths))])
-        scene_obj_paths.append(cur_scene_obj_paths)
-    return scene_obj_paths
 
 def generate_single_obj(obj_path: str) -> tuple[np.ndarray, np.ndarray]:
     verts, faces = read_off(obj_path)
@@ -92,6 +97,7 @@ def generate_scene(scene_paths: list[str]) -> tuple[np.ndarray, np.ndarray]:
     all_faces = np.vstack(all_faces)
     return all_verts, all_faces
 
+@nb.njit
 def sample_point_from_face(vertices, face):
     v0, v1, v2 = vertices[face]
     r1, r2 = np.random.rand(2)
@@ -99,6 +105,7 @@ def sample_point_from_face(vertices, face):
     point = (1 - sqrt_r1) * v0 + sqrt_r1 * (1 - r2) * v1 + sqrt_r1 * r2 * v2
     return point
 
+@nb.njit
 def farthest_point_sampling_faces(verts: np.ndarray, faces: np.ndarray, num_samples: int) -> np.ndarray:
     sampled_points = np.zeros((num_samples, 3))
     
@@ -120,7 +127,8 @@ def farthest_point_sampling_faces(verts: np.ndarray, faces: np.ndarray, num_samp
     return sampled_points
 
 def save_point_cloud(point_cloud: np.ndarray, file_path: str):
-    np.save(file_path, point_cloud)
+    pass
+    #np.save(file_path, point_cloud)
 
 def process_scene(scene_paths: list[str], num_points: int, output_dir:str, output_id:int):
     all_verts, all_faces = generate_scene(scene_paths)
@@ -136,11 +144,15 @@ def generate_synthetic_data(
         num_scenes: int = consts.NUM_TRAINING_SCENES+consts.NUM_VALIDATION_SCENES, 
         num_objs_in_scene: int = consts.NUM_OBJS_IN_SCENE,
         num_points_in_cloud: int = consts.NUM_POINTS_IN_CLOUD, 
-        data_path: str = '../ModelNet10', 
-        output_dir: str = './point_clouds'
+        data_dir: str = '../../ModelNet10', 
+        output_dir: str = '../syn_point_clouds'
     ):
+    this_fpath = os.path.split(Path(__file__).absolute())[:-1]
+    data_dir = os.path.join(*(*this_fpath, data_dir))
+    output_dir = os.path.join(*(*this_fpath, output_dir))
+    assert os.path.exists(data_dir)
 
-    all_fpaths = get_all_fpaths(data_path)
+    all_fpaths = get_all_fpaths(data_dir)
     scene_obj_paths = create_scene_subsets(num_scenes, num_objs_in_scene, all_fpaths)
     os.makedirs(output_dir, exist_ok=True)
     
