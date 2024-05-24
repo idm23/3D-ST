@@ -46,7 +46,8 @@ def train(
         train_dset:torch.Tensor, 
         val_dset:torch.Tensor, 
         student:StudentTeacher, 
-        optimizer:torch.optim.Adam
+        optimizer:torch.optim.Adam,
+        save_dir:str
     ):
     pbar = tqdm(range(consts.NUM_TRAINING_EPOCHS), position=0, leave=True)
     all_training_losses = []
@@ -72,9 +73,9 @@ def train(
 
         all_training_losses.append(np.array(training_losses))
         all_validation_losses.append(np.array(validation_losses))
-    np.save('pre_training_losses.npy', np.array(all_training_losses))
-    np.save('pre_validation_losses.npy', np.array(all_validation_losses))
-    torch.save(teacher.state_dict(), "pretrained_teacher.pth")
+    np.save(os.path.join(save_dir, 'training_losses.npy'), np.array(all_training_losses))
+    np.save(os.path.join(save_dir, 'validation_losses.npy'), np.array(all_validation_losses))
+    torch.save(teacher.state_dict(), os.path.join(save_dir, "trained_student.pth"))
 
 def regress(
         teacher, 
@@ -143,6 +144,7 @@ def regress(
         lr = consts.PRETRAINING_LR,
         weight_decay=consts.PRETRAINING_WD
     )
+    train(train_dset, val_dset, student, optimizer, save_dir)
 
 if __name__ == "__main__":
     print('Using device: ' +str(consts.DEVICE))

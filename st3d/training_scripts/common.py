@@ -59,7 +59,6 @@ def chamfer_distance(point_set_gt: torch.Tensor, point_set_pred: torch.Tensor) -
     #mean_dist_1 = torch.mean(min_dist_1)  # Scalar
     return cdistance
     
-
 def anomaly_score(normalized_t_fmap:torch.Tensor, s_fmap:torch.Tensor):
     return torch.sqrt((
         (s_fmap - normalized_t_fmap) ** 2
