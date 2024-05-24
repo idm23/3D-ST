@@ -109,7 +109,7 @@ def sample_point_from_face(vertices, face):
 def farthest_point_sampling_faces(verts: np.ndarray, faces: np.ndarray, num_samples: int) -> np.ndarray:
     sampled_points = np.zeros((num_samples, 3))
     
-    distances = np.ones(len(verts)) * 1e10
+    distances = np.ones(len(verts)) * np.inf
     # Sample the first point randomly from a face
     farthest = sample_point_from_face(verts, faces[np.random.choice(len(faces))])
     sampled_points[0] = farthest

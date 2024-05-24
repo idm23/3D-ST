@@ -34,7 +34,6 @@ def get_topk_indices(norms:torch.Tensor, k:int) -> torch.Tensor:
 
 def calculate_geom_features(points:torch.Tensor, k:int) -> tuple[torch.Tensor, torch.Tensor]:
     # Points is Nx3
-
     differences, norms = calc_point2point_diffs(points)
     closest_indices = get_topk_indices(norms, k)
 

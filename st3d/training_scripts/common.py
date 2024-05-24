@@ -48,35 +48,31 @@ def generate_model_pass_iterable(
     return iterable
 
 # ==================== LOSSES and SCORES ====================
-def chamfer_distance(point_set_1: torch.Tensor, point_set_2: torch.Tensor) -> torch.Tensor:
-    """
-    Calculate the Chamfer distance between two sets of points.
-    
-    Args:
-    point_set_1 (torch.Tensor): Tensor of shape (N, 3) representing the first set of points.
-    point_set_2 (torch.Tensor): Tensor of shape (M, 3) representing the second set of points.
-    
-    Returns:
-    torch.Tensor: The Chamfer distance between the two sets of points.
-    """
+def chamfer_distance(point_set_gt: torch.Tensor, point_set_pred: torch.Tensor) -> torch.Tensor:
     # Compute pairwise distance matrix
-    diff = point_set_1.unsqueeze(1) - point_set_2.unsqueeze(0)  # Shape (N, M, 3)
-    dist_matrix = torch.sum(diff ** 2, dim=-1)  # Shape (N, M)
+    diff = point_set_gt.unsqueeze(1) - point_set_pred.unsqueeze(0)  # Shape (N, M, 3)
+    dist_matrix = torch.sqrt(torch.sum(diff ** 2, dim=-1))  # Shape (N, M)
     
-    # Compute the nearest neighbor distances for each point in point_set_1
+    # Grab minimum distance point to every gt point
     min_dist_1, _ = torch.min(dist_matrix, dim=1)  # Shape (N)
-    mean_dist_1 = torch.mean(min_dist_1)  # Scalar
+    cdistance = torch.sum(min_dist_1)
+    #mean_dist_1 = torch.mean(min_dist_1)  # Scalar
+    return cdistance
     
-    # Compute the nearest neighbor distances for each point in point_set_2
-    min_dist_2, _ = torch.min(dist_matrix, dim=0)  # Shape (M)
-    mean_dist_2 = torch.mean(min_dist_2)  # Scalar
-    
-    # Chamfer distance is the sum of the mean nearest neighbor distances
-    chamfer_dist = mean_dist_1 + mean_dist_2
-    
-    return chamfer_dist
 
 def anomaly_score(normalized_t_fmap:torch.Tensor, s_fmap:torch.Tensor):
     return torch.sqrt((
         (s_fmap - normalized_t_fmap) ** 2
     ).sum(dim = 1))
+
+# ==================== PREPROCESSING ====================
+
+def get_avg_distance_scalar(train_data:torch.Tensor):
+    # Data is ?xNx3
+    summed_norms = 0
+    for point_cloud in tqdm(train_data):
+        point_cloud = point_cloud.to(consts.DEVICE)
+        geom_features, _ = anly.calculate_geom_features(point_cloud, consts.K)
+        summed_norms += geom_features[:, :, -1].sum().item()
+    
+    return summed_norms/(consts.K*consts.N)

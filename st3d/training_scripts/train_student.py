@@ -20,12 +20,9 @@ import st3d.training_scripts.common as common
 
 def calculate_fmap_distribution(t_fmaps:torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     # Shape (len(training_set)xNxd)
-    rolled_fmaps = t_fmaps.reshape(-1, t_fmaps.shape[-1])
+    rolled_fmaps = t_fmaps.reshape(-1, t_fmaps.shape[-1]).to(consts.DEVICE)
     std, mu = torch.std_mean(rolled_fmaps, dim = 0, keepdim=True)
-    return std, mu
-
-def normalize_t_fmap(t_fmap:torch.Tensor, mu:torch.Tensor, std:torch.Tensor):
-    pass
+    return std.to('cpu'), mu.to('cpu')
 
 def model_pass(
         student:StudentTeacher,
@@ -88,9 +85,10 @@ def regress(
     data_dir = os.path.join(*(*this_fpath, data_dir))
     save_dir = os.path.join(*(*this_fpath, save_dir))
 
-    train_data, val_data = common.get_all_data_from_memory(data_dir, 10, 5)
+    train_data, val_data = common.get_all_data_from_memory(data_dir, 500, 5)
     print('Loaded in point clouds from memory')
 
+    normalization_s = common.get_avg_distance_scalar(train_data)
     train_data/=normalization_s
     val_data/=normalization_s
     print('Normalized data with normalization constant (s): as: ' + str(normalization_s))
@@ -118,8 +116,8 @@ def regress(
             ).to('cpu')
             for (point_cloud, geom_features, closest_indices) in tqdm(val_dset)
         ]
-    train_tfmaps = torch.vstack(train_tfmaps)
-    val_tfmaps = torch.vstack(val_tfmaps)
+    train_tfmaps = torch.stack(train_tfmaps)
+    val_tfmaps = torch.stack(val_tfmaps)
     print(f'Precomputed Teacher feature maps with train shape {train_tfmaps.shape} and val shape {val_tfmaps.shape}')
 
     print('Normalizing Teacher feature maps')
@@ -153,4 +151,21 @@ if __name__ == "__main__":
     teacher = StudentTeacher(consts.K, consts.D, consts.NUM_RESIDUALS).to(consts.DEVICE)
     teacher.load_state_dict(torch.load(teacher_path))
     normalization_s = 17.4138
-    regress(teacher, normalization_s, '../real_point_clouds', '../training_saves')
+
+    data_dir = os.path.join(*(*this_fpath, '../syn_point_clouds'))
+    train_data, val_data = common.get_all_data_from_memory(data_dir, 50, 5)
+    train_data/=normalization_s
+    train_dset = common.generate_model_pass_iterable(train_data)
+    with torch.no_grad():
+        train_tfmaps = [
+            teacher(
+                point_cloud.to(consts.DEVICE), 
+                geom_features.to(consts.DEVICE), 
+                closest_indices.to(consts.DEVICE)
+            )
+            for (point_cloud, geom_features, closest_indices) in tqdm(train_dset)
+        ]
+    train_tfmaps = torch.stack(train_tfmaps)
+    mu, sigma = calculate_fmap_distribution(train_tfmaps)
+    print(f'Normalized Teacher feature maps with mu: {mu} and sigma: {sigma}')
+    #regress(teacher, normalization_s, '../real_point_clouds', '../training_saves')

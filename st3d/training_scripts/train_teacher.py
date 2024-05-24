@@ -18,19 +18,6 @@ import st3d.analytical as anly
 import st3d.training_scripts.common as common
 # ==================================
 
-# ==================== PREPROCESSING ====================
-
-def get_avg_distance_scalar(train_data:torch.Tensor):
-    # Data is ?xNx3
-
-    summed_norms = 0
-    for point_cloud in tqdm(train_data):
-        point_cloud = point_cloud.to(consts.DEVICE)
-        geom_features, _ = anly.calculate_geom_features(point_cloud, consts.K)
-        summed_norms += geom_features[:, :, -1].sum().item()
-    
-    return summed_norms/(consts.K*consts.N)
-
 # ==================== MODEL PASSES ====================
 def model_pass(
         teacher:StudentTeacher, 
@@ -56,10 +43,10 @@ def model_pass(
     
     loss = torch.zeros(1, device=consts.DEVICE)
     for i in range(len(chosen_idxs)):
-        loss += common.chamfer_distance(decoded_points[i], receptive_field_diffs[i])
+        loss += common.chamfer_distance(receptive_field_diffs[i], decoded_points[i])
     loss /= len(chosen_idxs)
 
-    return loss
+    return loss, point_features
 
 # ==================== TRAINING LOOPS ====================
 def train(
@@ -78,24 +65,32 @@ def train(
         validation_losses = []
         np.random.shuffle(train_dset)
 
+        teacher.train()
+        decoder.train()
+        all_point_features = []
         for items in train_dset:
             optimizer.zero_grad()
-            loss = model_pass(teacher, decoder, *items)
+            loss, point_features = model_pass(teacher, decoder, *items)
             training_losses.append(loss.item())
+            all_point_features.append(point_features)
             loss.backward()
             optimizer.step()
 
+        print(torch.vstack(all_point_features).mean(dim = 0))
+
+        teacher.eval()
+        decoder.eval()
         with torch.no_grad():
             for items in val_dset:
-                loss = model_pass(teacher, decoder, *items)
+                loss, point_features = model_pass(teacher, decoder, *items)
                 validation_losses.append(loss.item())
                 
         pbar.set_postfix({'train_loss': np.mean(training_losses), "val_loss":np.mean(validation_losses)})
 
         all_training_losses.append(np.array(training_losses))
         all_validation_losses.append(np.array(validation_losses))
-    np.save('pre_training_losses.npy', np.array(all_training_losses))
-    np.save('pre_validation_losses.npy', np.array(all_validation_losses))
+    np.save(os.path.join(save_dir, 'pre_training_losses.npy'), np.array(all_training_losses))
+    np.save(os.path.join(save_dir, 'pre_validation_losses.npy'), np.array(all_validation_losses))
     torch.save(teacher.state_dict(), os.path.join(save_dir, "pretrained_teacher.pth"))
     torch.save(decoder.state_dict(), os.path.join(save_dir, "pretrained_decoder.pth"))
 
@@ -110,7 +105,7 @@ def pretrain(data_dir:str, save_dir:str):
     print('Loaded in point clouds from memory')
 
     print('Calculating avg distance between points')
-    normalization_s = get_avg_distance_scalar(train_data)
+    normalization_s = common.get_avg_distance_scalar(train_data)
     train_data/=normalization_s
     val_data/=normalization_s
     print('Calculated normalization constant (s): as: ' + str(normalization_s))
@@ -121,6 +116,7 @@ def pretrain(data_dir:str, save_dir:str):
     print('Precomputed Geometric Properties for training/validation iterables')
 
     teacher = StudentTeacher(consts.K, consts.D, consts.NUM_RESIDUALS).to(device=consts.DEVICE)
+    #teacher.load_state_dict(torch.load(os.path.join(*(*this_fpath, '../training_saves/pretrained_teacher.pth'))))
     decoder = Decoder(consts.D).to(consts.DEVICE)
     optimizer = torch.optim.Adam(
         list(teacher.parameters()) + list(decoder.parameters()),
