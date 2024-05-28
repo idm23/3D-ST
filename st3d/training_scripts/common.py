@@ -26,6 +26,7 @@ def get_all_data_from_memory(
     for fpath in sorted(os.listdir(data_dir)):
         individual_arr = np.load(os.path.join(data_dir, fpath), allow_pickle=True)
         np_arrs.append(individual_arr)
+    np.random.shuffle(np_arrs)
     training_data = torch.from_numpy(np.array(np_arrs, dtype=np.float32)[:training_length])
     validation_data = torch.from_numpy(np.array(np_arrs, dtype=np.float32)[-validation_length:]) # Just don't make this 0
     return training_data, validation_data
@@ -51,18 +52,20 @@ def generate_model_pass_iterable(
 def chamfer_distance(point_set_gt: torch.Tensor, point_set_pred: torch.Tensor) -> torch.Tensor:
     # Compute pairwise distance matrix
     diff = point_set_gt.unsqueeze(1) - point_set_pred.unsqueeze(0)  # Shape (N, M, 3)
-    dist_matrix = torch.sqrt(torch.sum(diff ** 2, dim=-1))  # Shape (N, M)
+    sq_dist_matrix = torch.sum(diff ** 2, dim=-1) # Shape (N, M)
     
     # Grab minimum distance point to every gt point
-    min_dist_1, _ = torch.min(dist_matrix, dim=1)  # Shape (N)
-    cdistance = torch.sum(min_dist_1)
-    #mean_dist_1 = torch.mean(min_dist_1)  # Scalar
-    return cdistance
+    min_dist_1, _ = torch.min(sq_dist_matrix, dim=1)  # Shape (N)
+    cdistance_1 = torch.sum(min_dist_1)/min_dist_1.shape[0]
+
+    # Grab minimum distance point to every gt point
+    min_dist_2, _ = torch.min(sq_dist_matrix, dim=0)  # Shape (M)
+    cdistance_2 = torch.sum(min_dist_2)/min_dist_2.shape[0]
+
+    return cdistance_1 + cdistance_2
     
 def anomaly_score(normalized_t_fmap:torch.Tensor, s_fmap:torch.Tensor):
-    return torch.sqrt((
-        (s_fmap - normalized_t_fmap) ** 2
-    ).sum(dim = 1))
+    return torch.norm(s_fmap - normalized_t_fmap, dim = 1)
 
 # ==================== PREPROCESSING ====================
 
@@ -72,6 +75,7 @@ def get_avg_distance_scalar(train_data:torch.Tensor):
     for point_cloud in tqdm(train_data):
         point_cloud = point_cloud.to(consts.DEVICE)
         geom_features, _ = anly.calculate_geom_features(point_cloud, consts.K)
+        
         summed_norms += geom_features[:, :, -1].sum().item()
     
-    return summed_norms/(consts.K*consts.N)
+    return summed_norms/(consts.K*consts.N*len(train_data))

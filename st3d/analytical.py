@@ -27,9 +27,9 @@ def calc_point2point_diffs(points:torch.Tensor) -> tuple[torch.Tensor, torch.Ten
 
 def get_topk_indices(norms:torch.Tensor, k:int) -> torch.Tensor:
     # Norms is NxN
-    _, closest_indices = torch.topk(norms, k=k+1, largest=False)  # Shape (N, N+1)
+    _, closest_indices = torch.topk(norms, k=k+1, largest=False)  # Shape (N, k+1)
     # Drop self
-    closest_indices = closest_indices[:, 1:]  # Shape (N, N)
+    closest_indices = closest_indices[:, 1:]  # Shape (N, k)
     return closest_indices
 
 def calculate_geom_features(points:torch.Tensor, k:int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -37,9 +37,8 @@ def calculate_geom_features(points:torch.Tensor, k:int) -> tuple[torch.Tensor, t
     differences, norms = calc_point2point_diffs(points)
     closest_indices = get_topk_indices(norms, k)
 
-    batch_indices = torch.arange(points.shape[0]).unsqueeze(1).expand(points.shape[0], k).to(points.device)
-    closest_vector_diffs = differences[batch_indices, closest_indices]  # Shape (N, k, 3)
-    closest_scalar_diffs = norms[batch_indices, closest_indices]  # Shape (N, k)
+    closest_vector_diffs = differences[torch.arange(points.shape[0]).unsqueeze(1), closest_indices]  # Shape (N, k, 3)
+    closest_scalar_diffs = norms[torch.arange(points.shape[0]).unsqueeze(1), closest_indices]  # Shape (N, k)
     
     closest_scalar_diffs = closest_scalar_diffs.unsqueeze(-1)  # Shape (N, k, 1)
     geom_features = torch.cat((closest_vector_diffs, closest_scalar_diffs), dim=-1)  # Shape (N, k, 4)
@@ -47,7 +46,7 @@ def calculate_geom_features(points:torch.Tensor, k:int) -> tuple[torch.Tensor, t
     return geom_features, closest_indices
 
 @nb.njit
-def get_rf_speed(closest_indices: np.ndarray, chosen_idxs:np.ndarray) -> list[int]:
+def get_rf_speed(closest_indices: np.ndarray, chosen_idxs:np.ndarray) -> list[list[int]]:
     # Shape (N, k)
     receptive_fields = []
     for chosen_idx in chosen_idxs:
@@ -69,6 +68,7 @@ def get_rf_speed(closest_indices: np.ndarray, chosen_idxs:np.ndarray) -> list[in
 def get_receptive_fields(points:torch.Tensor, closest_indices:torch.Tensor, chosen_idxs:torch.Tensor) -> list[torch.Tensor]:
     # Shape (N, 3), (N, k), (Whatever number of samples the decoder gets)
     receptive_fields = get_rf_speed(closest_indices.numpy(), chosen_idxs.numpy())
-    receptive_fields = [points[torch.tensor(rf, dtype=int)] for rf in receptive_fields]
-    return receptive_fields
+    rf_idxs = [torch.tensor(rf, dtype=int) for rf in receptive_fields]
+    receptive_fields = [points[idxs] for idxs in rf_idxs]
+    return receptive_fields, rf_idxs
 

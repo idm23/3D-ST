@@ -32,7 +32,7 @@ def model_pass(
     point_features = teacher(point_cloud, geom_features, closest_indices)
 
     chosen_idxs = torch.randint(0, consts.N, (consts.DECODER_SAMPLE_SIZE,))
-    receptive_fields = anly.get_receptive_fields(point_cloud.cpu(), closest_indices.cpu(), chosen_idxs)
+    receptive_fields, _ = anly.get_receptive_fields(point_cloud.cpu(), closest_indices.cpu(), chosen_idxs)
     receptive_field_diffs = [
         (receptive_field - torch.mean(receptive_field, dim=0)).to(consts.DEVICE)
         for receptive_field in receptive_fields
@@ -43,10 +43,12 @@ def model_pass(
     
     loss = torch.zeros(1, device=consts.DEVICE)
     for i in range(len(chosen_idxs)):
+        #print('Rec', receptive_field_diffs[i])
+        #print('Dec', decoded_points[i])
         loss += common.chamfer_distance(receptive_field_diffs[i], decoded_points[i])
     loss /= len(chosen_idxs)
 
-    return loss, point_features
+    return loss
 
 # ==================== TRAINING LOOPS ====================
 def train(
@@ -67,22 +69,18 @@ def train(
 
         teacher.train()
         decoder.train()
-        all_point_features = []
         for items in train_dset:
             optimizer.zero_grad()
-            loss, point_features = model_pass(teacher, decoder, *items)
+            loss = model_pass(teacher, decoder, *items)
             training_losses.append(loss.item())
-            all_point_features.append(point_features)
             loss.backward()
             optimizer.step()
-
-        print(torch.vstack(all_point_features).mean(dim = 0))
 
         teacher.eval()
         decoder.eval()
         with torch.no_grad():
             for items in val_dset:
-                loss, point_features = model_pass(teacher, decoder, *items)
+                loss = model_pass(teacher, decoder, *items)
                 validation_losses.append(loss.item())
                 
         pbar.set_postfix({'train_loss': np.mean(training_losses), "val_loss":np.mean(validation_losses)})

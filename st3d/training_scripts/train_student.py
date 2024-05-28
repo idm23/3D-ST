@@ -9,6 +9,7 @@ from pathlib import Path
 import torch
 import numpy as np
 from tqdm import tqdm
+import numba as nb
 # ==================================
 
 # ========= program imports ========
@@ -18,11 +19,21 @@ import st3d.analytical as anly
 import st3d.training_scripts.common as common
 # ==================================
 
+@nb.njit
+def cpu_fmap_distribution(t_fmaps:np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    mu = t_fmaps.sum(axis=0)/t_fmaps.shape[0]
+    std = np.sqrt(((t_fmaps - mu) ** 2).sum(axis = 0)/t_fmaps.shape[0])
+    #mu = np.mean(t_fmaps, axis= 0, keepdims=True)
+    #std = np.std(t_fmaps, axis=0, keepdims=True)
+    return std, mu
+
 def calculate_fmap_distribution(t_fmaps:torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     # Shape (len(training_set)xNxd)
-    rolled_fmaps = t_fmaps.reshape(-1, t_fmaps.shape[-1]).to(consts.DEVICE)
-    std, mu = torch.std_mean(rolled_fmaps, dim = 0, keepdim=True)
-    return std.to('cpu'), mu.to('cpu')
+    rolled_fmaps = t_fmaps.reshape(-1, t_fmaps.shape[-1])
+    std, mu = cpu_fmap_distribution(rolled_fmaps.numpy())
+    return torch.from_numpy(std), torch.from_numpy(mu)
+    """std, mu = torch.std_mean(rolled_fmaps.to(consts.DEVICE), dim = 0, keepdim=True)
+    return std.to('cpu'), mu.to('cpu')"""
 
 def model_pass(
         student:StudentTeacher,
@@ -37,8 +48,7 @@ def model_pass(
     normalized_t_fmap = normalized_t_fmap.to(consts.DEVICE)
     s_fmap = student(point_cloud, geom_features, closest_indices)
     
-    loss = ((s_fmap - normalized_t_fmap) ** 2).sum()/point_cloud.shape[0]
-    
+    loss = (common.anomaly_score(normalized_t_fmap, s_fmap)**2).sum()/point_cloud.shape[0]
 
     return loss
 
@@ -57,13 +67,15 @@ def train(
         validation_losses = []
         np.random.shuffle(train_dset)
 
+        student.train()
         for items in train_dset:
             optimizer.zero_grad()
-            loss = model_pass(student *items)
+            loss = model_pass(student, *items)
             training_losses.append(loss.item())
             loss.backward()
             optimizer.step()
 
+        student.eval()
         with torch.no_grad():
             for items in val_dset:
                 loss = model_pass(student, *items)
@@ -86,9 +98,14 @@ def regress(
     data_dir = os.path.join(*(*this_fpath, data_dir))
     save_dir = os.path.join(*(*this_fpath, save_dir))
 
-    train_data, val_data = common.get_all_data_from_memory(data_dir, 500, 5)
+    train_data, val_data = common.get_all_data_from_memory(
+        data_dir, 
+        1500,#consts.STUDENT_TRAINING_SAMPLES, 
+        consts.STUDENT_VALIDATION_SAMPLES
+    )
     print('Loaded in point clouds from memory')
 
+    # Recalculate normalization
     normalization_s = common.get_avg_distance_scalar(train_data)
     train_data/=normalization_s
     val_data/=normalization_s
@@ -100,36 +117,37 @@ def regress(
     print('Precomputed Geometric Properties for training/validation iterables')
 
     print('Precomputing Teacher feature maps')
+    teacher.eval()
     with torch.no_grad():
-        train_tfmaps = [
+        train_tfmaps = torch.stack([
             teacher(
                 point_cloud.to(consts.DEVICE), 
                 geom_features.to(consts.DEVICE), 
                 closest_indices.to(consts.DEVICE)
             ).to('cpu')
             for (point_cloud, geom_features, closest_indices) in tqdm(train_dset)
-        ]
-        val_tfmaps = [
+        ])
+        val_tfmaps = torch.stack([
             teacher(
                 point_cloud.to(consts.DEVICE), 
                 geom_features.to(consts.DEVICE), 
                 closest_indices.to(consts.DEVICE)
             ).to('cpu')
             for (point_cloud, geom_features, closest_indices) in tqdm(val_dset)
-        ]
-    train_tfmaps = torch.stack(train_tfmaps)
-    val_tfmaps = torch.stack(val_tfmaps)
+        ])
     print(f'Precomputed Teacher feature maps with train shape {train_tfmaps.shape} and val shape {val_tfmaps.shape}')
 
     print('Normalizing Teacher feature maps')
-    mu, sigma = calculate_fmap_distribution(train_tfmaps)
-    train_tfmaps = (train_tfmaps - mu)/sigma
-    val_tfmaps = (train_tfmaps - mu)/sigma
+    sigma, mu = calculate_fmap_distribution(train_tfmaps)
+    train_tfmaps = ((train_tfmaps - mu)/sigma)
+    val_tfmaps = ((val_tfmaps - mu)/sigma)
+    np.save(os.path.join(save_dir, 'mu.npy'), mu.numpy())
+    np.save(os.path.join(save_dir, 'sigma.npy'), sigma.numpy())
     print(f'Normalized Teacher feature maps with mu: {mu} and sigma: {sigma}')
 
     train_dset = [
         (point_cloud, geom_features, closest_indices, train_tfmap) 
-        for (point_cloud, geom_features, closest_indices), train_tfmap 
+        for (point_cloud, geom_features, closest_indices), train_tfmap
         in zip(train_dset, train_tfmaps)
     ]
     val_dset = [
@@ -152,22 +170,5 @@ if __name__ == "__main__":
     teacher_path = os.path.join(*(*this_fpath, "../training_saves/pretrained_teacher.pth"))
     teacher = StudentTeacher(consts.K, consts.D, consts.NUM_RESIDUALS).to(consts.DEVICE)
     teacher.load_state_dict(torch.load(teacher_path))
-    normalization_s = 17.4138
-
-    data_dir = os.path.join(*(*this_fpath, '../syn_point_clouds'))
-    train_data, val_data = common.get_all_data_from_memory(data_dir, 50, 5)
-    train_data/=normalization_s
-    train_dset = common.generate_model_pass_iterable(train_data)
-    with torch.no_grad():
-        train_tfmaps = [
-            teacher(
-                point_cloud.to(consts.DEVICE), 
-                geom_features.to(consts.DEVICE), 
-                closest_indices.to(consts.DEVICE)
-            )
-            for (point_cloud, geom_features, closest_indices) in tqdm(train_dset)
-        ]
-    train_tfmaps = torch.stack(train_tfmaps)
-    mu, sigma = calculate_fmap_distribution(train_tfmaps)
-    print(f'Normalized Teacher feature maps with mu: {mu} and sigma: {sigma}')
-    #regress(teacher, normalization_s, '../real_point_clouds', '../training_saves')
+    normalization_s = 0.0735661319732666
+    regress(teacher, normalization_s, '../real_point_clouds', '../training_saves')

@@ -1,6 +1,8 @@
 """File containing torch models
 """
 # ======== standard imports ========
+import os
+from pathlib import Path
 # ==================================
 
 # ======= third party imports ======
@@ -23,7 +25,7 @@ class SharedMLP(nn.Module):
         super(SharedMLP, self).__init__()
 
         self.dense = nn.Linear(input_dim, output_dim)
-        self.activation_fn = nn.LeakyReLU(0.2)
+        self.activation_fn = nn.LeakyReLU(consts.MLP_LEAKY_SLOPE)
 
     def forward(self, x:torch.Tensor) -> torch.Tensor:
         x = self.activation_fn(self.dense(x))
@@ -43,7 +45,6 @@ class LFA(nn.Module):
         # Shape: geom_features (N, k, 4), input_features (N, d_lfa)
         geom_outputs = self.mlp(geom_features)  # Shape (N, k, d_lfa)
     
-
         # Gather the relevant input features using indices
         relevant_input_features = input_features[closest_indices]  # Shape  (N, k, d_lfa)
 
@@ -64,6 +65,8 @@ class Residual(nn.Module):
         self.mlp_final = SharedMLP(d, d)
         self.mlp_resiudal = SharedMLP(d, d)
 
+        self.final_activation = nn.LeakyReLU(consts.MLP_LEAKY_SLOPE)
+
     def forward(
             self, 
             input_features:torch.Tensor, 
@@ -75,7 +78,7 @@ class Residual(nn.Module):
         activated = self.lfa1(activated, geom_features, closest_indices) # Shape(N, d//2)
         activated = self.lfa2(activated, geom_features, closest_indices) # Shape(N, d)
         activated = self.mlp_final(activated) # Shape(N, d)
-        return activated + residual
+        return self.final_activation(activated + residual)
     
 class StudentTeacher(nn.Module):
     def __init__(self, k:int, d:int, num_residuals:int) -> None:
@@ -86,6 +89,7 @@ class StudentTeacher(nn.Module):
         self.residuals = nn.ModuleList(
             [Residual(d) for i in range(num_residuals)]
         )
+        self.final_mlp = SharedMLP(d, d)
 
     def forward(
             self, 
@@ -97,7 +101,7 @@ class StudentTeacher(nn.Module):
         point_features = torch.zeros((points.shape[0], self.d)).to(consts.DEVICE) # Shape (N, d)
         for residual_layer in self.residuals:
             point_features = residual_layer(point_features, geom_features, closest_indices) # Shape (N, d)
-        return point_features
+        return self.final_mlp(point_features)
     
     def point_based_forward(self, points:torch.Tensor) -> torch.Tensor:
         geom_features, closest_indices = anly.calculate_geom_features(points, self.k) # Shape (N, k, 4), (N, k)
@@ -126,9 +130,11 @@ class Decoder(nn.Module):
         return self.output_layer(x).reshape(-1, consts.NUM_DECODED_POINTS, 3)
 
 if __name__ == "__main__":
-    point_cloud_0 = np.load('point_clouds/point_cloud_0.npy')
+    this_fpath = os.path.split(Path(__file__).absolute())[:-1]
+    point_cloud_0_path = os.path.join(*(*this_fpath, 'syn_point_clouds/point_cloud_0.npy'))
+
+    point_cloud_0 = np.load(point_cloud_0_path)
     point_cloud_0 = torch.from_numpy(point_cloud_0).float().to(consts.DEVICE)
-    print(point_cloud_0, point_cloud_0.shape)
     teacher = StudentTeacher(consts.K, consts.D, consts.NUM_RESIDUALS).to(consts.DEVICE)
     point_features = teacher.point_based_forward(point_cloud_0)
     print(point_features.shape)

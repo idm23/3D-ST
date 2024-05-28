@@ -124,4 +124,20 @@ def generate_mvtec_pointclouds(
         build_point_cloud_from_fpath(*items)
 
 if __name__ == '__main__':
-    generate_mvtec_pointclouds()
+    this_fpath = os.path.split(Path(__file__).absolute())[:-1]
+
+    # Generate training clouds
+    #generate_mvtec_pointclouds()
+    
+    # Generate analysis cloud
+    with open(os.path.join(*(*this_fpath, '../../MVTEC', 'cookie', 'calibration', 'camera_parameters.json')), 'r') as f:
+        camera_params = json.load(f)
+    output_dir = os.path.join(*(*this_fpath,os.path.join('../defective_point_clouds')))
+    os.makedirs(output_dir, exist_ok=True)
+    build_point_cloud_from_fpath(
+        consts.NUM_POINTS_IN_CLOUD, 
+        os.path.join(*(*this_fpath, os.path.join('../../MVTEC', 'cookie', 'test', 'crack', 'xyz', '000.tiff'))),
+        camera_params,
+        0,
+        output_dir
+    )
